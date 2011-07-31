@@ -1,0 +1,1346 @@
+   1               		.file	"test_lcd.c"
+   2               		.arch attiny2313
+   3               	__SREG__ = 0x3f
+   4               	__SP_H__ = 0x3e
+   5               	__SP_L__ = 0x3d
+   6               	__tmp_reg__ = 0
+   7               	__zero_reg__ = 1
+   8               		.global __do_copy_data
+   9               		.global __do_clear_bss
+  12               		.text
+  13               	.Ltext0:
+  96               	.global	__vector_13
+  98               	__vector_13:
+  99               		.stabd	46,0,0
+   1:test_lcd.c    **** /*************************************************************************
+   2:test_lcd.c    **** Title:    testing output to a HD44780 based LCD display.
+   3:test_lcd.c    **** Author:   Peter Fleury  <pfleury@gmx.ch>  http://jump.to/fleury
+   4:test_lcd.c    **** File:     $Id: test_lcd.c,v 1.6 2004/12/10 13:53:59 peter Exp $
+   5:test_lcd.c    **** Software: AVR-GCC 3.3
+   6:test_lcd.c    **** Hardware: HD44780 compatible LCD text display
+   7:test_lcd.c    ****           ATS90S8515/ATmega if memory-mapped LCD interface is used
+   8:test_lcd.c    ****           any AVR with 7 free I/O pins if 4-bit IO port mode is used
+   9:test_lcd.c    **** **************************************************************************/
+  10:test_lcd.c    **** #define F_CPU 8000000UL
+  11:test_lcd.c    **** 
+  12:test_lcd.c    **** #include <stdlib.h>
+  13:test_lcd.c    **** #include <avr/interrupt.h>
+  14:test_lcd.c    **** #include <avr/signal.h>
+  15:test_lcd.c    **** #include <avr/io.h>
+  16:test_lcd.c    **** #include <avr/delay.h>
+  17:test_lcd.c    **** #include <avr/pgmspace.h>
+  18:test_lcd.c    **** #include "lcd.h"
+  19:test_lcd.c    **** 
+  20:test_lcd.c    **** 
+  21:test_lcd.c    **** //#define XTAL        8e6                 // 8MHz
+  22:test_lcd.c    **** 
+  23:test_lcd.c    **** #define PHASE_A     (PINB & 1<<PINB5)
+  24:test_lcd.c    **** #define PHASE_B     (PINB & 1<<PINB4)
+  25:test_lcd.c    **** 
+  26:test_lcd.c    **** volatile int8_t enc_delta;              // Drehgeberbewegung zwischen
+  27:test_lcd.c    ****                                         // zwei Auslesungen im Hauptprogramm
+  28:test_lcd.c    **** int8_t table[16] PROGMEM = {0,0,-1,0,0,0,0,1,1,0,0,0,0,-1,0,0};
+  29:test_lcd.c    **** char buf[10];
+  30:test_lcd.c    **** 
+  31:test_lcd.c    **** uint8_t time;
+  32:test_lcd.c    **** uint8_t sides;
+  33:test_lcd.c    **** 
+  34:test_lcd.c    **** /*
+  35:test_lcd.c    **** ** constant definitions
+  36:test_lcd.c    **** */
+  37:test_lcd.c    **** static const PROGMEM unsigned char copyRightChar[] =
+  38:test_lcd.c    **** {
+  39:test_lcd.c    **** 	0x07, 0x08, 0x13, 0x14, 0x14, 0x13, 0x08, 0x07,
+  40:test_lcd.c    **** 	0x00, 0x10, 0x08, 0x08, 0x08, 0x08, 0x10, 0x00
+  41:test_lcd.c    **** };
+  42:test_lcd.c    **** 
+  43:test_lcd.c    **** 
+  44:test_lcd.c    **** 
+  45:test_lcd.c    **** ISR( TIMER0_COMPA_vect )             // 1ms fuer manuelle Eingabe
+  46:test_lcd.c    **** {
+ 101               	.LM0:
+ 102               	/* prologue: frame size=0 */
+ 103 0000 1F92      		push __zero_reg__
+ 104 0002 0F92      		push __tmp_reg__
+ 105 0004 0FB6      		in __tmp_reg__,__SREG__
+ 106 0006 0F92      		push __tmp_reg__
+ 107 0008 1124      		clr __zero_reg__
+ 108 000a 8F93      		push r24
+ 109 000c EF93      		push r30
+ 110 000e FF93      		push r31
+ 111               	/* prologue end (size=8) */
+  47:test_lcd.c    ****     static int8_t last=0;           // alten Wert speichern
+  48:test_lcd.c    **** 
+  49:test_lcd.c    ****     last = (last << 2)  & 0x0F;
+ 113               	.LM1:
+ 114 0010 8091 0000 		lds r24,last.1558
+ 115 0014 880F      		lsl r24
+ 116 0016 880F      		lsl r24
+ 117 0018 8C70      		andi r24,lo8(12)
+ 118 001a 8093 0000 		sts last.1558,r24
+  50:test_lcd.c    ****     if (PHASE_A) last |=2;
+ 120               	.LM2:
+ 121 001e B59B      		sbis 54-0x20,5
+ 122 0020 00C0      		rjmp .L2
+ 124               	.LM3:
+ 125 0022 8260      		ori r24,lo8(2)
+ 126 0024 8093 0000 		sts last.1558,r24
+ 127               	.L2:
+  51:test_lcd.c    ****     if (PHASE_B) last |=1;
+ 129               	.LM4:
+ 130 0028 B49B      		sbis 54-0x20,4
+ 131 002a 00C0      		rjmp .L4
+ 132 002c 8091 0000 		lds r24,last.1558
+ 133 0030 8160      		ori r24,lo8(1)
+ 134 0032 8093 0000 		sts last.1558,r24
+ 135               	.L4:
+  52:test_lcd.c    ****     enc_delta += pgm_read_byte(&table[last]);
+ 137               	.LM5:
+ 138 0036 8091 0000 		lds r24,enc_delta
+ 139               	.LBB66:
+ 140 003a E091 0000 		lds r30,last.1558
+ 141 003e FF27      		clr r31
+ 142 0040 E7FD      		sbrc r30,7
+ 143 0042 F095      		com r31
+ 144 0044 E050      		subi r30,lo8(-(table))
+ 145 0046 F040      		sbci r31,hi8(-(table))
+ 146               	/* #APP */
+ 147 0048 C895      		lpm
+ 148 004a E02D      		mov r30, r0
+ 149               		
+ 150               	/* #NOAPP */
+ 151               	.LBE66:
+ 152 004c 8E0F      		add r24,r30
+ 153 004e 8093 0000 		sts enc_delta,r24
+ 154               	/* epilogue: frame size=0 */
+ 155 0052 FF91      		pop r31
+ 156 0054 EF91      		pop r30
+ 157 0056 8F91      		pop r24
+ 158 0058 0F90      		pop __tmp_reg__
+ 159 005a 0FBE      		out __SREG__,__tmp_reg__
+ 160 005c 0F90      		pop __tmp_reg__
+ 161 005e 1F90      		pop __zero_reg__
+ 162 0060 1895      		reti
+ 163               	/* epilogue end (size=8) */
+ 164               	/* function __vector_13 size 53 (37) */
+ 172               	.Lscope0:
+ 174               		.stabd	78,0,0
+ 176               	.global	encode_init
+ 178               	encode_init:
+ 179               		.stabd	46,0,0
+  53:test_lcd.c    **** }
+  54:test_lcd.c    **** 
+  55:test_lcd.c    **** 
+  56:test_lcd.c    **** void encode_init( void )            // nur Timer 0 initialisieren
+  57:test_lcd.c    **** {
+ 181               	.LM6:
+ 182               	/* prologue: frame size=0 */
+ 183               	/* prologue end (size=0) */
+  58:test_lcd.c    ****   TCCR0A = 1<<WGM01;     // CTC, XTAL / 64
+ 185               	.LM7:
+ 186 0062 82E0      		ldi r24,lo8(2)
+ 187 0064 80BF      		out 80-0x20,r24
+  59:test_lcd.c    ****   TCCR0B = 1<<CS01^1<<CS00;
+ 189               	.LM8:
+ 190 0066 83E0      		ldi r24,lo8(3)
+ 191 0068 83BF      		out 83-0x20,r24
+  60:test_lcd.c    **** 
+  61:test_lcd.c    ****   OCR0A = (uint8_t)(XTAL / 64.0 * 1e-3 - 0.5);   // 1ms
+ 193               	.LM9:
+ 194 006a 8CE7      		ldi r24,lo8(124)
+ 195 006c 86BF      		out 86-0x20,r24
+  62:test_lcd.c    ****   TIMSK |= 1<<OCIE0A;
+ 197               	.LM10:
+ 198 006e 89B7      		in r24,89-0x20
+ 199 0070 8160      		ori r24,lo8(1)
+ 200 0072 89BF      		out 89-0x20,r24
+ 201               	/* epilogue: frame size=0 */
+ 202 0074 0895      		ret
+ 203               	/* epilogue end (size=1) */
+ 204               	/* function encode_init size 10 (9) */
+ 206               	.Lscope1:
+ 208               		.stabd	78,0,0
+ 210               	.global	encode_read
+ 212               	encode_read:
+ 213               		.stabd	46,0,0
+  63:test_lcd.c    **** }
+  64:test_lcd.c    **** 
+  65:test_lcd.c    **** 
+  66:test_lcd.c    **** int8_t encode_read( void )         // Encoder auslesen
+  67:test_lcd.c    **** {
+ 215               	.LM11:
+ 216               	/* prologue: frame size=0 */
+ 217               	/* prologue end (size=0) */
+  68:test_lcd.c    ****   int8_t val;
+  69:test_lcd.c    **** 
+  70:test_lcd.c    ****   // atomarer Variablenzugriff
+  71:test_lcd.c    ****   cli();
+ 219               	.LM12:
+ 220               	/* #APP */
+ 221 0076 F894      		cli
+  72:test_lcd.c    ****   val = enc_delta;
+ 223               	.LM13:
+ 224               	/* #NOAPP */
+ 225 0078 8091 0000 		lds r24,enc_delta
+  73:test_lcd.c    ****   enc_delta = 0;
+ 227               	.LM14:
+ 228 007c 1092 0000 		sts enc_delta,__zero_reg__
+  74:test_lcd.c    ****   sei();
+ 230               	.LM15:
+ 231               	/* #APP */
+ 232 0080 7894      		sei
+  75:test_lcd.c    ****   return val;
+  76:test_lcd.c    **** }
+ 234               	.LM16:
+ 235               	/* #NOAPP */
+ 236 0082 9927      		clr r25
+ 237 0084 87FD      		sbrc r24,7
+ 238 0086 9095      		com r25
+ 239               	/* epilogue: frame size=0 */
+ 240 0088 0895      		ret
+ 241               	/* epilogue end (size=1) */
+ 242               	/* function encode_read size 12 (11) */
+ 247               	.Lscope2:
+ 249               		.stabd	78,0,0
+ 251               	.global	key_pressed
+ 253               	key_pressed:
+ 254               		.stabd	46,0,0
+  77:test_lcd.c    **** 
+  78:test_lcd.c    **** uint8_t key_pressed () {
+ 256               	.LM17:
+ 257               	/* prologue: frame size=0 */
+ 258               	/* prologue end (size=0) */
+  79:test_lcd.c    **** 	return PINB & 1<<PINB3;
+ 260               	.LM18:
+ 261 008a 86B3      		in r24,54-0x20
+ 262 008c 9927      		clr r25
+  80:test_lcd.c    **** }
+ 264               	.LM19:
+ 265 008e 8870      		andi r24,lo8(8)
+ 266 0090 9070      		andi r25,hi8(8)
+ 267               	/* epilogue: frame size=0 */
+ 268 0092 0895      		ret
+ 269               	/* epilogue end (size=1) */
+ 270               	/* function key_pressed size 5 (4) */
+ 272               	.Lscope3:
+ 274               		.stabd	78,0,0
+ 276               	.global	beep
+ 278               	beep:
+ 279               		.stabd	46,0,0
+  81:test_lcd.c    **** 
+  82:test_lcd.c    **** void output_time_info () {
+  83:test_lcd.c    **** 	lcd_gotoxy(0,0);
+  84:test_lcd.c    **** 				lcd_puts("Belichtungsdauer");
+  85:test_lcd.c    **** 				lcd_gotoxy(0,1);
+  86:test_lcd.c    **** 				itoa((time+1)*10, buf, 10);
+  87:test_lcd.c    **** 				lcd_puts(buf);
+  88:test_lcd.c    **** 				lcd_puts(" Sekunden  ");
+  89:test_lcd.c    **** }
+  90:test_lcd.c    **** void read_time () {
+  91:test_lcd.c    **** 	int8_t val;
+  92:test_lcd.c    **** 
+  93:test_lcd.c    **** 	output_time_info();
+  94:test_lcd.c    **** 
+  95:test_lcd.c    **** 	for (;;) {
+  96:test_lcd.c    **** 		val = encode_read();
+  97:test_lcd.c    **** 
+  98:test_lcd.c    **** 		if (val != 0) {
+  99:test_lcd.c    **** 			time+=val;
+ 100:test_lcd.c    **** 			output_time_info();
+ 101:test_lcd.c    **** 		}
+ 102:test_lcd.c    **** 
+ 103:test_lcd.c    **** 		if (key_pressed()) {
+ 104:test_lcd.c    **** 			// Wait until key release
+ 105:test_lcd.c    **** 						while (key_pressed()) {}
+ 106:test_lcd.c    **** 			return;
+ 107:test_lcd.c    **** 		}
+ 108:test_lcd.c    **** 	}
+ 109:test_lcd.c    **** 
+ 110:test_lcd.c    **** }
+ 111:test_lcd.c    **** 
+ 112:test_lcd.c    **** void output_side_info () {
+ 113:test_lcd.c    **** 	lcd_gotoxy(0,0);
+ 114:test_lcd.c    **** 				lcd_puts("Roehren");
+ 115:test_lcd.c    **** 				lcd_gotoxy(0,1);
+ 116:test_lcd.c    **** 
+ 117:test_lcd.c    **** 
+ 118:test_lcd.c    **** 				switch (sides) {
+ 119:test_lcd.c    **** 				case 0:
+ 120:test_lcd.c    **** 					lcd_puts("beide");
+ 121:test_lcd.c    **** 					break;
+ 122:test_lcd.c    **** 				case 1:
+ 123:test_lcd.c    **** 					lcd_puts("oben ");
+ 124:test_lcd.c    **** 					break;
+ 125:test_lcd.c    **** 				case 2:
+ 126:test_lcd.c    **** 					lcd_puts("unten");
+ 127:test_lcd.c    **** 					break;
+ 128:test_lcd.c    **** 				}
+ 129:test_lcd.c    **** }
+ 130:test_lcd.c    **** 
+ 131:test_lcd.c    **** 
+ 132:test_lcd.c    **** void read_sides () {
+ 133:test_lcd.c    **** 	int8_t val;
+ 134:test_lcd.c    **** 
+ 135:test_lcd.c    **** 	output_side_info();
+ 136:test_lcd.c    **** 
+ 137:test_lcd.c    **** 	for (;;) {
+ 138:test_lcd.c    **** 		val = encode_read();
+ 139:test_lcd.c    **** 
+ 140:test_lcd.c    **** 		if (val != 0) {
+ 141:test_lcd.c    **** 
+ 142:test_lcd.c    **** 			sides += val;
+ 143:test_lcd.c    **** 
+ 144:test_lcd.c    **** 			if (sides > 2) {
+ 145:test_lcd.c    **** 				sides = 0;
+ 146:test_lcd.c    **** 			}
+ 147:test_lcd.c    **** 
+ 148:test_lcd.c    **** 			output_side_info();
+ 149:test_lcd.c    **** 		}
+ 150:test_lcd.c    **** 
+ 151:test_lcd.c    **** 		if (key_pressed()) {
+ 152:test_lcd.c    **** 			// Wait until key release
+ 153:test_lcd.c    **** 			while (key_pressed()) {}
+ 154:test_lcd.c    **** 			return;
+ 155:test_lcd.c    **** 		}
+ 156:test_lcd.c    **** 	}
+ 157:test_lcd.c    **** }
+ 158:test_lcd.c    **** 
+ 159:test_lcd.c    **** void beep () {
+ 281               	.LM20:
+ 282               	/* prologue: frame size=0 */
+ 283               	/* prologue end (size=0) */
+ 284 0094 20E0      		ldi r18,lo8(0)
+ 285 0096 E0E1      		ldi r30,lo8(10000)
+ 286 0098 F7E2      		ldi r31,hi8(10000)
+ 287               	.L14:
+ 288               	.LBB67:
+ 289               	.LBB68:
+ 290               	.LBB69:
+ 291               	.LBB70:
+ 293               	.Ltext1:
+   1:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** /* Copyright (c) 2002, Marek Michalkiewicz
+   2:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    Copyright (c) 2007 Joerg Wunsch
+   3:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    All rights reserved.
+   4:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+   5:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    Redistribution and use in source and binary forms, with or without
+   6:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    modification, are permitted provided that the following conditions are met:
+   7:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+   8:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    * Redistributions of source code must retain the above copyright
+   9:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****      notice, this list of conditions and the following disclaimer.
+  10:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  11:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    * Redistributions in binary form must reproduce the above copyright
+  12:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****      notice, this list of conditions and the following disclaimer in
+  13:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****      the documentation and/or other materials provided with the
+  14:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****      distribution.
+  15:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  16:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****    * Neither the name of the copyright holders nor the names of
+  17:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****      contributors may be used to endorse or promote products derived
+  18:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****      from this software without specific prior written permission.
+  19:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  20:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  21:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  22:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  23:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  24:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  25:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  26:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  27:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  28:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  29:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  30:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****   POSSIBILITY OF SUCH DAMAGE. */
+  31:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  32:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** /* $Id: delay_basic.h,v 1.1 2007/05/13 21:23:20 joerg_wunsch Exp $ */
+  33:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  34:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** #ifndef _UTIL_DELAY_BASIC_H_
+  35:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** #define _UTIL_DELAY_BASIC_H_ 1
+  36:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  37:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** #include <inttypes.h>
+  38:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  39:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** /** \file */
+  40:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** /** \defgroup util_delay_basic <util/delay_basic.h>: Basic busy-wait delay loops
+  41:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     \code
+  42:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     #include <util/delay_basic.h>
+  43:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     \endcode
+  44:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  45:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     The functions in this header file implement simple delay loops
+  46:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     that perform a busy-waiting.  They are typically used to
+  47:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     facilitate short delays in the program execution.  They are
+  48:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     implemented as count-down loops with a well-known CPU cycle
+  49:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     count per loop iteration.  As such, no other processing can
+  50:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     occur simultaneously.  It should be kept in mind that the
+  51:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     functions described here do not disable interrupts.
+  52:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  53:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     In general, for long delays, the use of hardware timers is
+  54:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     much preferrable, as they free the CPU, and allow for
+  55:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     concurrent processing of other events while the timer is
+  56:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     running.  However, in particular for very short delays, the
+  57:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     overhead of setting up a hardware timer is too much compared
+  58:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     to the overall delay time.
+  59:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  60:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     Two inline functions are provided for the actual delay algorithms.
+  61:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  62:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** */
+  63:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  64:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** #if !defined(__DOXYGEN__)
+  65:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** static inline void _delay_loop_1(uint8_t __count) __attribute__((always_inline));
+  66:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** static inline void _delay_loop_2(uint16_t __count) __attribute__((always_inline));
+  67:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** #endif
+  68:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  69:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** /** \ingroup util_delay_basic
+  70:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  71:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     Delay loop using an 8-bit counter \c __count, so up to 256
+  72:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     iterations are possible.  (The value 256 would have to be passed
+  73:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     as 0.)  The loop executes three CPU cycles per iteration, not
+  74:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     including the overhead the compiler needs to setup the counter
+  75:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     register.
+  76:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  77:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     Thus, at a CPU speed of 1 MHz, delays of up to 768 microseconds
+  78:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     can be achieved.
+  79:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** */
+  80:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** void
+  81:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** _delay_loop_1(uint8_t __count)
+  82:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** {
+  83:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 	__asm__ volatile (
+  84:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 		"1: dec %0" "\n\t"
+  85:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 		"brne 1b"
+  86:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 		: "=r" (__count)
+  87:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 		: "0" (__count)
+  88:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 	);
+  89:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** }
+  90:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  91:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** /** \ingroup util_delay_basic
+  92:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  93:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     Delay loop using a 16-bit counter \c __count, so up to 65536
+  94:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     iterations are possible.  (The value 65536 would have to be
+  95:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     passed as 0.)  The loop executes four CPU cycles per iteration,
+  96:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     not including the overhead the compiler requires to setup the
+  97:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     counter register pair.
+  98:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 
+  99:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     Thus, at a CPU speed of 1 MHz, delays of up to about 262.1
+ 100:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****     milliseconds can be achieved.
+ 101:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h ****  */
+ 102:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** void
+ 103:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** _delay_loop_2(uint16_t __count)
+ 104:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** {
+ 105:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay_basic.h **** 	__asm__ volatile (
+ 295               	.LM21:
+ 296 009a 8E2F      		mov r24,r30
+ 297 009c 9F2F      		mov r25,r31
+ 298               	/* #APP */
+ 299 009e 0197      		1: sbiw r24,1
+ 300 00a0 01F4      		brne 1b
+ 301               	/* #NOAPP */
+ 302               	.LBE70:
+ 303               	.LBE69:
+ 304               	.LBE68:
+ 305               	.LBE67:
+ 307               	.Ltext2:
+ 160:test_lcd.c    **** 	uint8_t master_timer;
+ 161:test_lcd.c    **** 
+ 162:test_lcd.c    **** 	for (master_timer=0;master_timer<10;master_timer++) {
+ 163:test_lcd.c    **** 		_delay_ms(5);
+ 164:test_lcd.c    **** 		PORTB |= (1<<PB2);
+ 309               	.LM22:
+ 310 00a2 C29A      		sbi 56-0x20,2
+ 311               	.LBB71:
+ 312               	.LBB72:
+ 313               	.LBB73:
+ 314               	.LBB74:
+ 316               	.Ltext3:
+ 318               	.LM23:
+ 319 00a4 8E2F      		mov r24,r30
+ 320 00a6 9F2F      		mov r25,r31
+ 321               	/* #APP */
+ 322 00a8 0197      		1: sbiw r24,1
+ 323 00aa 01F4      		brne 1b
+ 324               	/* #NOAPP */
+ 325               	.LBE74:
+ 326               	.LBE73:
+ 327               	.LBE72:
+ 328               	.LBE71:
+ 330               	.Ltext4:
+ 165:test_lcd.c    **** 		_delay_ms(5);
+ 166:test_lcd.c    **** 		PORTB &= ~(1<<PB2);
+ 332               	.LM24:
+ 333 00ac C298      		cbi 56-0x20,2
+ 335               	.LM25:
+ 336 00ae 2F5F      		subi r18,lo8(-(1))
+ 337 00b0 2A30      		cpi r18,lo8(10)
+ 338 00b2 01F4      		brne .L14
+ 339               	/* epilogue: frame size=0 */
+ 340 00b4 0895      		ret
+ 341               	/* epilogue end (size=1) */
+ 342               	/* function beep size 21 (20) */
+ 353               	.Lscope4:
+ 355               		.stabd	78,0,0
+ 356               		.data
+ 357               	.LC0:
+ 358 0000 5A65 6974 		.string	"Zeit: "
+ 358      3A20 00
+ 359               	.LC1:
+ 360 0007 2073 2000 		.string	" s "
+ 361               	.LC2:
+ 362 000b 4665 7274 		.string	"Fertig!"
+ 362      6967 2100 
+ 363               	.LC3:
+ 364 0013 4775 7465 		.string	"Guten Appetit"
+ 364      6E20 4170 
+ 364      7065 7469 
+ 364      7400 
+ 365               		.text
+ 367               	.global	start_doing_it
+ 369               	start_doing_it:
+ 370               		.stabd	46,0,0
+ 167:test_lcd.c    **** 	}
+ 168:test_lcd.c    **** }
+ 169:test_lcd.c    **** void start_doing_it () {
+ 372               	.LM26:
+ 373               	/* prologue: frame size=0 */
+ 374 00b6 EF92      		push r14
+ 375 00b8 FF92      		push r15
+ 376 00ba 0F93      		push r16
+ 377 00bc 1F93      		push r17
+ 378 00be CF93      		push r28
+ 379 00c0 DF93      		push r29
+ 380               	/* prologue end (size=6) */
+ 170:test_lcd.c    **** 	uint32_t master_timer = time;
+ 171:test_lcd.c    **** 
+ 172:test_lcd.c    **** 	lcd_clrscr();
+ 382               	.LM27:
+ 383 00c2 00D0      		rcall lcd_clrscr
+ 173:test_lcd.c    **** 
+ 174:test_lcd.c    **** 	for (master_timer = ((time+1)*10)-1;master_timer > 0;master_timer--) {
+ 385               	.LM28:
+ 386 00c4 8091 0000 		lds r24,time
+ 387 00c8 9927      		clr r25
+ 388 00ca 6AE0      		ldi r22,lo8(10)
+ 389 00cc 70E0      		ldi r23,hi8(10)
+ 390 00ce 00D0      		rcall __mulhi3
+ 391 00d0 0996      		adiw r24,9
+ 392 00d2 E82E      		mov r14,r24
+ 393 00d4 F92E      		mov r15,r25
+ 394 00d6 0027      		clr r16
+ 395 00d8 F7FC      		sbrc r15,7
+ 396 00da 0095      		com r16
+ 397 00dc 102F      		mov r17,r16
+ 398 00de D92F      		mov r29,r25
+ 399 00e0 C82F      		mov r28,r24
+ 400 00e2 00C0      		rjmp .L20
+ 401               	.L21:
+ 175:test_lcd.c    **** 		lcd_home();
+ 403               	.LM29:
+ 404 00e4 00D0      		rcall lcd_home
+ 176:test_lcd.c    **** 		lcd_puts("Zeit: ");
+ 406               	.LM30:
+ 407 00e6 80E0      		ldi r24,lo8(.LC0)
+ 408 00e8 90E0      		ldi r25,hi8(.LC0)
+ 409 00ea 00D0      		rcall lcd_puts
+ 177:test_lcd.c    **** 
+ 178:test_lcd.c    **** 		itoa(master_timer, buf, 10);
+ 411               	.LM31:
+ 412 00ec 4AE0      		ldi r20,lo8(10)
+ 413 00ee 50E0      		ldi r21,hi8(10)
+ 414 00f0 60E0      		ldi r22,lo8(buf)
+ 415 00f2 70E0      		ldi r23,hi8(buf)
+ 416 00f4 8C2F      		mov r24,r28
+ 417 00f6 9D2F      		mov r25,r29
+ 418 00f8 00D0      		rcall itoa
+ 179:test_lcd.c    **** 		lcd_puts(buf);
+ 420               	.LM32:
+ 421 00fa 80E0      		ldi r24,lo8(buf)
+ 422 00fc 90E0      		ldi r25,hi8(buf)
+ 423 00fe 00D0      		rcall lcd_puts
+ 180:test_lcd.c    **** 		lcd_puts(" s ");
+ 425               	.LM33:
+ 426 0100 80E0      		ldi r24,lo8(.LC1)
+ 427 0102 90E0      		ldi r25,hi8(.LC1)
+ 428 0104 00D0      		rcall lcd_puts
+ 429 0106 20E1      		ldi r18,lo8(10000)
+ 430 0108 37E2      		ldi r19,hi8(10000)
+ 431 010a E8EC      		ldi r30,lo8(200)
+ 432 010c F0E0      		ldi r31,hi8(200)
+ 433               	.L22:
+ 434               	.LBB75:
+ 435               	.LBB76:
+ 436               	.LBB77:
+ 437               	.LBB78:
+ 439               	.Ltext5:
+ 441               	.LM34:
+ 442 010e 8E2F      		mov r24,r30
+ 443 0110 9F2F      		mov r25,r31
+ 444               	/* #APP */
+ 445 0112 0197      		1: sbiw r24,1
+ 446 0114 01F4      		brne 1b
+ 447               	/* #NOAPP */
+ 448               	.LBE78:
+ 449               	.LBE77:
+ 451               	.Ltext6:
+   1:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /* Copyright (c) 2002, Marek Michalkiewicz
+   2:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    Copyright (c) 2004,2005,2007 Joerg Wunsch
+   3:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    Copyright (c) 2007  Florin-Viorel Petrov
+   4:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    All rights reserved.
+   5:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+   6:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    Redistribution and use in source and binary forms, with or without
+   7:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    modification, are permitted provided that the following conditions are met:
+   8:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+   9:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    * Redistributions of source code must retain the above copyright
+  10:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****      notice, this list of conditions and the following disclaimer.
+  11:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  12:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    * Redistributions in binary form must reproduce the above copyright
+  13:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****      notice, this list of conditions and the following disclaimer in
+  14:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****      the documentation and/or other materials provided with the
+  15:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****      distribution.
+  16:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  17:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    * Neither the name of the copyright holders nor the names of
+  18:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****      contributors may be used to endorse or promote products derived
+  19:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****      from this software without specific prior written permission.
+  20:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  21:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+  22:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  23:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  24:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+  25:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+  26:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+  27:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+  28:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+  29:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+  30:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+  31:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****   POSSIBILITY OF SUCH DAMAGE. */
+  32:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  33:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /* $Id: delay.h,v 1.5 2007/10/28 23:25:56 joerg_wunsch Exp $ */
+  34:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  35:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #ifndef _UTIL_DELAY_H_
+  36:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #define _UTIL_DELAY_H_ 1
+  37:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  38:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #include <inttypes.h>
+  39:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #include <util/delay_basic.h>
+  40:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  41:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /** \file */
+  42:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /** \defgroup util_delay <util/delay.h>: Convenience functions for busy-wait delay loops
+  43:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     \code
+  44:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     #define F_CPU 1000000UL  // 1 MHz
+  45:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     //#define F_CPU 14.7456E6
+  46:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     #include <util/delay.h>
+  47:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     \endcode
+  48:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  49:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     \note As an alternative method, it is possible to pass the
+  50:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     F_CPU macro down to the compiler from the Makefile.
+  51:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     Obviously, in that case, no \c \#define statement should be
+  52:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     used.
+  53:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  54:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     The functions in this header file are wrappers around the basic
+  55:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     busy-wait functions from <util/delay_basic.h>.  They are meant as
+  56:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     convenience functions where actual time values can be specified
+  57:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     rather than a number of cycles to wait for.  The idea behind is
+  58:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     that compile-time constant expressions will be eliminated by
+  59:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     compiler optimization so floating-point expressions can be used
+  60:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     to calculate the number of delay cycles needed based on the CPU
+  61:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     frequency passed by the macro F_CPU.
+  62:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  63:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     \note In order for these functions to work as intended, compiler
+  64:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     optimizations <em>must</em> be enabled, and the delay time
+  65:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     <em>must</em> be an expression that is a known constant at
+  66:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     compile-time.  If these requirements are not met, the resulting
+  67:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     delay will be much longer (and basically unpredictable), and
+  68:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     applications that otherwise do not use floating-point calculations
+  69:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     will experience severe code bloat by the floating-point library
+  70:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     routines linked into the application.
+  71:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  72:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     The functions available allow the specification of microsecond, and
+  73:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     millisecond delays directly, using the application-supplied macro
+  74:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****     F_CPU as the CPU clock frequency (in Hertz).
+  75:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  76:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** */
+  77:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  78:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #if !defined(__DOXYGEN__)
+  79:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** static inline void _delay_us(double __us) __attribute__((always_inline));
+  80:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** static inline void _delay_ms(double __ms) __attribute__((always_inline));
+  81:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #endif
+  82:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  83:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #ifndef F_CPU
+  84:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /* prevent compiler error by supplying a default */
+  85:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** # warning "F_CPU not defined for <util/delay.h>"
+  86:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** # define F_CPU 1000000UL
+  87:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #endif
+  88:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  89:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #ifndef __OPTIMIZE__
+  90:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** # warning "Compiler optimizations disabled; functions from <util/delay.h> won't work as designed"
+  91:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** #endif
+  92:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  93:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /**
+  94:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    \ingroup util_delay
+  95:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  96:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    Perform a delay of \c __us microseconds, using _delay_loop_1().
+  97:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+  98:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    The macro F_CPU is supposed to be defined to a
+  99:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 100:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 101:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    The maximal possible delay is 768 us / F_CPU in MHz.
+ 102:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 103:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    If the user requests a delay greater than the maximal possible one,
+ 104:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    _delay_us() will automatically call _delay_ms() instead.  The user
+ 105:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    will not be informed about this case.
+ 106:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****  */
+ 107:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** void
+ 108:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** _delay_us(double __us)
+ 109:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** {
+ 110:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	uint8_t __ticks;
+ 111:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	double __tmp = ((F_CPU) / 3e6) * __us;
+ 112:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	if (__tmp < 1.0)
+ 113:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		__ticks = 1;
+ 114:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	else if (__tmp > 255)
+ 115:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	{
+ 116:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		_delay_ms(__us / 1000.0);
+ 117:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		return;
+ 118:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	}
+ 119:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	else
+ 120:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		__ticks = (uint8_t)__tmp;
+ 121:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	_delay_loop_1(__ticks);
+ 122:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** }
+ 123:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 124:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 125:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** /**
+ 126:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    \ingroup util_delay
+ 127:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 128:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    Perform a delay of \c __ms milliseconds, using _delay_loop_2().
+ 129:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 130:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    The macro F_CPU is supposed to be defined to a
+ 131:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    constant defining the CPU clock frequency (in Hertz).
+ 132:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 133:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    The maximal possible delay is 262.14 ms / F_CPU in MHz.
+ 134:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 
+ 135:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    When the user request delay which exceed the maximum possible one,
+ 136:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    _delay_ms() provides a decreased resolution functionality. In this
+ 137:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    mode _delay_ms() will work with a resolution of 1/10 ms, providing
+ 138:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    delays up to 6.5535 seconds (independent from CPU frequency).  The
+ 139:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****    user will not be informed about decreased resolution.
+ 140:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h ****  */
+ 141:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** void
+ 142:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** _delay_ms(double __ms)
+ 143:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** {
+ 144:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	uint16_t __ticks;
+ 145:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	double __tmp = ((F_CPU) / 4e3) * __ms;
+ 146:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	if (__tmp < 1.0)
+ 147:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		__ticks = 1;
+ 148:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	else if (__tmp > 65535)
+ 149:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 	{
+ 150:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		//	__ticks = requested delay in 1/10 ms
+ 151:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		__ticks = (uint16_t) (__ms * 10.0);
+ 152:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		while(__ticks)
+ 153:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 		{
+ 154:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 			// wait 1/10 ms
+ 155:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 			_delay_loop_2(((F_CPU) / 4e3) / 10);
+ 156:/usr/lib/gcc/avr/4.1.2/../../../../avr/include/util/delay.h **** 			__ticks --;
+ 453               	.LM35:
+ 454 0116 2150      		subi r18,lo8(-(-1))
+ 455 0118 3040      		sbci r19,hi8(-(-1))
+ 457               	.LM36:
+ 458 011a 01F4      		brne .L22
+ 459               	.LBE76:
+ 460               	.LBE75:
+ 462               	.Ltext7:
+ 464               	.LM37:
+ 465 011c 0894      		sec
+ 466 011e E108      		sbc r14,__zero_reg__
+ 467 0120 F108      		sbc r15,__zero_reg__
+ 468 0122 0109      		sbc r16,__zero_reg__
+ 469 0124 1109      		sbc r17,__zero_reg__
+ 470 0126 2197      		sbiw r28,1
+ 471               	.L20:
+ 472 0128 E114      		cp r14,__zero_reg__
+ 473 012a F104      		cpc r15,__zero_reg__
+ 474 012c 0105      		cpc r16,__zero_reg__
+ 475 012e 1105      		cpc r17,__zero_reg__
+ 476 0130 01F4      		brne .L21
+ 181:test_lcd.c    **** 		_delay_ms(1000);
+ 182:test_lcd.c    **** 	}
+ 183:test_lcd.c    **** 
+ 184:test_lcd.c    **** 	lcd_clrscr();
+ 478               	.LM38:
+ 479 0132 00D0      		rcall lcd_clrscr
+ 185:test_lcd.c    **** 	lcd_puts("Fertig!");
+ 481               	.LM39:
+ 482 0134 80E0      		ldi r24,lo8(.LC2)
+ 483 0136 90E0      		ldi r25,hi8(.LC2)
+ 484 0138 00D0      		rcall lcd_puts
+ 186:test_lcd.c    **** 	lcd_gotoxy(0,1);
+ 486               	.LM40:
+ 487 013a 61E0      		ldi r22,lo8(1)
+ 488 013c 80E0      		ldi r24,lo8(0)
+ 489 013e 00D0      		rcall lcd_gotoxy
+ 187:test_lcd.c    **** 	lcd_puts("Guten Appetit");
+ 491               	.LM41:
+ 492 0140 80E0      		ldi r24,lo8(.LC3)
+ 493 0142 90E0      		ldi r25,hi8(.LC3)
+ 494 0144 00D0      		rcall lcd_puts
+ 495 0146 C0E0      		ldi r28,lo8(0)
+ 496 0148 D0E0      		ldi r29,hi8(0)
+ 497               	.L25:
+ 188:test_lcd.c    **** 	for (master_timer = 0; master_timer < 5;master_timer++) {
+ 189:test_lcd.c    **** 		beep();
+ 499               	.LM42:
+ 500 014a 00D0      		rcall beep
+ 501 014c 28EE      		ldi r18,lo8(1000)
+ 502 014e 33E0      		ldi r19,hi8(1000)
+ 503 0150 E8EC      		ldi r30,lo8(200)
+ 504 0152 F0E0      		ldi r31,hi8(200)
+ 505               	.L26:
+ 506               	.LBB79:
+ 507               	.LBB80:
+ 508               	.LBB81:
+ 509               	.LBB82:
+ 511               	.Ltext8:
+ 513               	.LM43:
+ 514 0154 8E2F      		mov r24,r30
+ 515 0156 9F2F      		mov r25,r31
+ 516               	/* #APP */
+ 517 0158 0197      		1: sbiw r24,1
+ 518 015a 01F4      		brne 1b
+ 519               	/* #NOAPP */
+ 520               	.LBE82:
+ 521               	.LBE81:
+ 523               	.Ltext9:
+ 525               	.LM44:
+ 526 015c 2150      		subi r18,lo8(-(-1))
+ 527 015e 3040      		sbci r19,hi8(-(-1))
+ 529               	.LM45:
+ 530 0160 01F4      		brne .L26
+ 531               	.LBE80:
+ 532               	.LBE79:
+ 534               	.Ltext10:
+ 190:test_lcd.c    **** 			_delay_ms(100);
+ 191:test_lcd.c    **** 			beep();
+ 536               	.LM46:
+ 537 0162 00D0      		rcall beep
+ 538 0164 28EE      		ldi r18,lo8(1000)
+ 539 0166 33E0      		ldi r19,hi8(1000)
+ 540 0168 E8EC      		ldi r30,lo8(200)
+ 541 016a F0E0      		ldi r31,hi8(200)
+ 542               	.L28:
+ 543               	.LBB83:
+ 544               	.LBB84:
+ 545               	.LBB85:
+ 546               	.LBB86:
+ 548               	.Ltext11:
+ 550               	.LM47:
+ 551 016c 8E2F      		mov r24,r30
+ 552 016e 9F2F      		mov r25,r31
+ 553               	/* #APP */
+ 554 0170 0197      		1: sbiw r24,1
+ 555 0172 01F4      		brne 1b
+ 556               	/* #NOAPP */
+ 557               	.LBE86:
+ 558               	.LBE85:
+ 560               	.Ltext12:
+ 562               	.LM48:
+ 563 0174 2150      		subi r18,lo8(-(-1))
+ 564 0176 3040      		sbci r19,hi8(-(-1))
+ 566               	.LM49:
+ 567 0178 01F4      		brne .L28
+ 568               	.LBE84:
+ 569               	.LBE83:
+ 571               	.Ltext13:
+ 192:test_lcd.c    **** 			_delay_ms(100);
+ 193:test_lcd.c    **** 			beep();
+ 573               	.LM50:
+ 574 017a 00D0      		rcall beep
+ 575 017c 28EE      		ldi r18,lo8(1000)
+ 576 017e 33E0      		ldi r19,hi8(1000)
+ 577 0180 E8EC      		ldi r30,lo8(200)
+ 578 0182 F0E0      		ldi r31,hi8(200)
+ 579               	.L30:
+ 580               	.LBB87:
+ 581               	.LBB88:
+ 582               	.LBB89:
+ 583               	.LBB90:
+ 585               	.Ltext14:
+ 587               	.LM51:
+ 588 0184 8E2F      		mov r24,r30
+ 589 0186 9F2F      		mov r25,r31
+ 590               	/* #APP */
+ 591 0188 0197      		1: sbiw r24,1
+ 592 018a 01F4      		brne 1b
+ 593               	/* #NOAPP */
+ 594               	.LBE90:
+ 595               	.LBE89:
+ 597               	.Ltext15:
+ 599               	.LM52:
+ 600 018c 2150      		subi r18,lo8(-(-1))
+ 601 018e 3040      		sbci r19,hi8(-(-1))
+ 603               	.LM53:
+ 604 0190 01F4      		brne .L30
+ 605               	.LBE88:
+ 606               	.LBE87:
+ 608               	.Ltext16:
+ 194:test_lcd.c    **** 			_delay_ms(100);
+ 195:test_lcd.c    **** 			beep();
+ 610               	.LM54:
+ 611 0192 00D0      		rcall beep
+ 612 0194 20E1      		ldi r18,lo8(10000)
+ 613 0196 37E2      		ldi r19,hi8(10000)
+ 614 0198 E8EC      		ldi r30,lo8(200)
+ 615 019a F0E0      		ldi r31,hi8(200)
+ 616               	.L32:
+ 617               	.LBB91:
+ 618               	.LBB92:
+ 619               	.LBB93:
+ 620               	.LBB94:
+ 622               	.Ltext17:
+ 624               	.LM55:
+ 625 019c 8E2F      		mov r24,r30
+ 626 019e 9F2F      		mov r25,r31
+ 627               	/* #APP */
+ 628 01a0 0197      		1: sbiw r24,1
+ 629 01a2 01F4      		brne 1b
+ 630               	/* #NOAPP */
+ 631               	.LBE94:
+ 632               	.LBE93:
+ 634               	.Ltext18:
+ 636               	.LM56:
+ 637 01a4 2150      		subi r18,lo8(-(-1))
+ 638 01a6 3040      		sbci r19,hi8(-(-1))
+ 640               	.LM57:
+ 641 01a8 01F4      		brne .L32
+ 642               	.LBE92:
+ 643               	.LBE91:
+ 645               	.Ltext19:
+ 196:test_lcd.c    **** 			_delay_ms(1000);
+ 197:test_lcd.c    **** 			beep();
+ 647               	.LM58:
+ 648 01aa 00D0      		rcall beep
+ 198:test_lcd.c    **** 			beep();
+ 650               	.LM59:
+ 651 01ac 00D0      		rcall beep
+ 199:test_lcd.c    **** 			beep();
+ 653               	.LM60:
+ 654 01ae 00D0      		rcall beep
+ 655 01b0 20E1      		ldi r18,lo8(10000)
+ 656 01b2 37E2      		ldi r19,hi8(10000)
+ 657 01b4 E8EC      		ldi r30,lo8(200)
+ 658 01b6 F0E0      		ldi r31,hi8(200)
+ 659               	.L34:
+ 660               	.LBB95:
+ 661               	.LBB96:
+ 662               	.LBB97:
+ 663               	.LBB98:
+ 665               	.Ltext20:
+ 667               	.LM61:
+ 668 01b8 8E2F      		mov r24,r30
+ 669 01ba 9F2F      		mov r25,r31
+ 670               	/* #APP */
+ 671 01bc 0197      		1: sbiw r24,1
+ 672 01be 01F4      		brne 1b
+ 673               	/* #NOAPP */
+ 674               	.LBE98:
+ 675               	.LBE97:
+ 677               	.Ltext21:
+ 679               	.LM62:
+ 680 01c0 2150      		subi r18,lo8(-(-1))
+ 681 01c2 3040      		sbci r19,hi8(-(-1))
+ 683               	.LM63:
+ 684 01c4 01F4      		brne .L34
+ 685 01c6 2196      		adiw r28,1
+ 686               	.LBE96:
+ 687               	.LBE95:
+ 689               	.Ltext22:
+ 691               	.LM64:
+ 692 01c8 C530      		cpi r28,5
+ 693 01ca D105      		cpc r29,__zero_reg__
+ 694 01cc 01F0      		breq .+2
+ 695 01ce 00C0      		rjmp .L25
+ 696               	/* epilogue: frame size=0 */
+ 697 01d0 DF91      		pop r29
+ 698 01d2 CF91      		pop r28
+ 699 01d4 1F91      		pop r17
+ 700 01d6 0F91      		pop r16
+ 701 01d8 FF90      		pop r15
+ 702 01da EF90      		pop r14
+ 703 01dc 0895      		ret
+ 704               	/* epilogue end (size=7) */
+ 705               	/* function start_doing_it size 172 (159) */
+ 746               	.Lscope5:
+ 748               		.stabd	78,0,0
+ 749               		.data
+ 750               	.LC4:
+ 751 0021 526F 6568 		.string	"Roehren"
+ 751      7265 6E00 
+ 752               	.LC5:
+ 753 0029 6265 6964 		.string	"beide"
+ 753      6500 
+ 754               	.LC6:
+ 755 002f 6F62 656E 		.string	"oben "
+ 755      2000 
+ 756               	.LC7:
+ 757 0035 756E 7465 		.string	"unten"
+ 757      6E00 
+ 758               		.text
+ 760               	.global	output_side_info
+ 762               	output_side_info:
+ 763               		.stabd	46,0,0
+ 765               	.LM65:
+ 766               	/* prologue: frame size=0 */
+ 767               	/* prologue end (size=0) */
+ 769               	.LM66:
+ 770 01de 60E0      		ldi r22,lo8(0)
+ 771 01e0 80E0      		ldi r24,lo8(0)
+ 772 01e2 00D0      		rcall lcd_gotoxy
+ 774               	.LM67:
+ 775 01e4 80E0      		ldi r24,lo8(.LC4)
+ 776 01e6 90E0      		ldi r25,hi8(.LC4)
+ 777 01e8 00D0      		rcall lcd_puts
+ 779               	.LM68:
+ 780 01ea 61E0      		ldi r22,lo8(1)
+ 781 01ec 80E0      		ldi r24,lo8(0)
+ 782 01ee 00D0      		rcall lcd_gotoxy
+ 784               	.LM69:
+ 785 01f0 8091 0000 		lds r24,sides
+ 786 01f4 8130      		cpi r24,lo8(1)
+ 787 01f6 01F0      		breq .L55
+ 789               	.LM70:
+ 790 01f8 8130      		cpi r24,lo8(1)
+ 791 01fa 00F0      		brlo .L54
+ 792 01fc 8230      		cpi r24,lo8(2)
+ 793 01fe 01F4      		brne .L57
+ 794 0200 00C0      		rjmp .L56
+ 795               	.L54:
+ 797               	.LM71:
+ 798 0202 80E0      		ldi r24,lo8(.LC5)
+ 799 0204 90E0      		ldi r25,hi8(.LC5)
+ 800 0206 00C0      		rjmp .L58
+ 801               	.L55:
+ 803               	.LM72:
+ 804 0208 80E0      		ldi r24,lo8(.LC6)
+ 805 020a 90E0      		ldi r25,hi8(.LC6)
+ 806               	.L58:
+ 807 020c 00D0      		rcall lcd_puts
+ 808 020e 0895      		ret
+ 809               	.L56:
+ 811               	.LM73:
+ 812 0210 80E0      		ldi r24,lo8(.LC7)
+ 813 0212 90E0      		ldi r25,hi8(.LC7)
+ 814 0214 00D0      		rcall lcd_puts
+ 815               	.L57:
+ 816 0216 0895      		ret
+ 817               	/* epilogue: frame size=0 */
+ 818               	/* epilogue: noreturn */
+ 819               	/* epilogue end (size=0) */
+ 820               	/* function output_side_info size 29 (29) */
+ 822               	.Lscope6:
+ 824               		.stabd	78,0,0
+ 826               	.global	read_sides
+ 828               	read_sides:
+ 829               		.stabd	46,0,0
+ 831               	.LM74:
+ 832               	/* prologue: frame size=0 */
+ 833               	/* prologue end (size=0) */
+ 835               	.LM75:
+ 836 0218 00D0      		rcall output_side_info
+ 837               	.L60:
+ 838               	.LBB99:
+ 839               	.LBB100:
+ 841               	.LM76:
+ 842               	/* #APP */
+ 843 021a F894      		cli
+ 845               	.LM77:
+ 846               	/* #NOAPP */
+ 847 021c 8091 0000 		lds r24,enc_delta
+ 849               	.LM78:
+ 850 0220 1092 0000 		sts enc_delta,__zero_reg__
+ 852               	.LM79:
+ 853               	/* #APP */
+ 854 0224 7894      		sei
+ 855               	/* #NOAPP */
+ 856               	.LBE100:
+ 857               	.LBE99:
+ 859               	.LM80:
+ 860 0226 9927      		clr r25
+ 861 0228 87FD      		sbrc r24,7
+ 862 022a 9095      		com r25
+ 863 022c 282F      		mov r18,r24
+ 865               	.LM81:
+ 866 022e 8823      		tst r24
+ 867 0230 01F0      		breq .L61
+ 869               	.LM82:
+ 870 0232 8091 0000 		lds r24,sides
+ 871 0236 820F      		add r24,r18
+ 872 0238 8093 0000 		sts sides,r24
+ 874               	.LM83:
+ 875 023c 8330      		cpi r24,lo8(3)
+ 876 023e 00F0      		brlo .L63
+ 878               	.LM84:
+ 879 0240 1092 0000 		sts sides,__zero_reg__
+ 880               	.L63:
+ 882               	.LM85:
+ 883 0244 00D0      		rcall output_side_info
+ 884               	.L61:
+ 886               	.LM86:
+ 887 0246 B39B      		sbis 54-0x20,3
+ 888 0248 00C0      		rjmp .L60
+ 889               	.L68:
+ 891               	.LM87:
+ 892 024a B399      		sbic 54-0x20,3
+ 893 024c 00C0      		rjmp .L68
+ 894               	/* epilogue: frame size=0 */
+ 895 024e 0895      		ret
+ 896               	/* epilogue end (size=1) */
+ 897               	/* function read_sides size 30 (29) */
+ 905               	.Lscope7:
+ 907               		.stabd	78,0,0
+ 908               		.data
+ 909               	.LC8:
+ 910 003b 4265 6C69 		.string	"Belichtungsdauer"
+ 910      6368 7475 
+ 910      6E67 7364 
+ 910      6175 6572 
+ 910      00
+ 911               	.LC9:
+ 912 004c 2053 656B 		.string	" Sekunden  "
+ 912      756E 6465 
+ 912      6E20 2000 
+ 913               		.text
+ 915               	.global	output_time_info
+ 917               	output_time_info:
+ 918               		.stabd	46,0,0
+ 920               	.LM88:
+ 921               	/* prologue: frame size=0 */
+ 922 0250 0F93      		push r16
+ 923 0252 1F93      		push r17
+ 924               	/* prologue end (size=2) */
+ 926               	.LM89:
+ 927 0254 60E0      		ldi r22,lo8(0)
+ 928 0256 80E0      		ldi r24,lo8(0)
+ 929 0258 00D0      		rcall lcd_gotoxy
+ 931               	.LM90:
+ 932 025a 80E0      		ldi r24,lo8(.LC8)
+ 933 025c 90E0      		ldi r25,hi8(.LC8)
+ 934 025e 00D0      		rcall lcd_puts
+ 936               	.LM91:
+ 937 0260 61E0      		ldi r22,lo8(1)
+ 938 0262 80E0      		ldi r24,lo8(0)
+ 939 0264 00D0      		rcall lcd_gotoxy
+ 941               	.LM92:
+ 942 0266 00E0      		ldi r16,lo8(buf)
+ 943 0268 10E0      		ldi r17,hi8(buf)
+ 944 026a 8091 0000 		lds r24,time
+ 945 026e 9927      		clr r25
+ 946 0270 6AE0      		ldi r22,lo8(10)
+ 947 0272 70E0      		ldi r23,hi8(10)
+ 948 0274 00D0      		rcall __mulhi3
+ 949 0276 4AE0      		ldi r20,lo8(10)
+ 950 0278 50E0      		ldi r21,hi8(10)
+ 951 027a 712F      		mov r23,r17
+ 952 027c 602F      		mov r22,r16
+ 953 027e 0A96      		adiw r24,10
+ 954 0280 00D0      		rcall itoa
+ 956               	.LM93:
+ 957 0282 912F      		mov r25,r17
+ 958 0284 802F      		mov r24,r16
+ 959 0286 00D0      		rcall lcd_puts
+ 961               	.LM94:
+ 962 0288 80E0      		ldi r24,lo8(.LC9)
+ 963 028a 90E0      		ldi r25,hi8(.LC9)
+ 964 028c 00D0      		rcall lcd_puts
+ 965               	/* epilogue: frame size=0 */
+ 966 028e 1F91      		pop r17
+ 967 0290 0F91      		pop r16
+ 968 0292 0895      		ret
+ 969               	/* epilogue end (size=3) */
+ 970               	/* function output_time_info size 34 (29) */
+ 972               	.Lscope8:
+ 974               		.stabd	78,0,0
+ 976               	.global	read_time
+ 978               	read_time:
+ 979               		.stabd	46,0,0
+ 981               	.LM95:
+ 982               	/* prologue: frame size=0 */
+ 983               	/* prologue end (size=0) */
+ 985               	.LM96:
+ 986 0294 00D0      		rcall output_time_info
+ 987               	.L75:
+ 988               	.LBB101:
+ 989               	.LBB102:
+ 991               	.LM97:
+ 992               	/* #APP */
+ 993 0296 F894      		cli
+ 995               	.LM98:
+ 996               	/* #NOAPP */
+ 997 0298 8091 0000 		lds r24,enc_delta
+ 999               	.LM99:
+ 1000 029c 1092 0000 		sts enc_delta,__zero_reg__
+ 1002               	.LM100:
+ 1003               	/* #APP */
+ 1004 02a0 7894      		sei
+ 1005               	/* #NOAPP */
+ 1006               	.LBE102:
+ 1007               	.LBE101:
+ 1009               	.LM101:
+ 1010 02a2 9927      		clr r25
+ 1011 02a4 87FD      		sbrc r24,7
+ 1012 02a6 9095      		com r25
+ 1013 02a8 282F      		mov r18,r24
+ 1015               	.LM102:
+ 1016 02aa 8823      		tst r24
+ 1017 02ac 01F0      		breq .L76
+ 1019               	.LM103:
+ 1020 02ae 8091 0000 		lds r24,time
+ 1021 02b2 820F      		add r24,r18
+ 1022 02b4 8093 0000 		sts time,r24
+ 1024               	.LM104:
+ 1025 02b8 00D0      		rcall output_time_info
+ 1026               	.L76:
+ 1028               	.LM105:
+ 1029 02ba B39B      		sbis 54-0x20,3
+ 1030 02bc 00C0      		rjmp .L75
+ 1031               	.L81:
+ 1033               	.LM106:
+ 1034 02be B399      		sbic 54-0x20,3
+ 1035 02c0 00C0      		rjmp .L81
+ 1036               	/* epilogue: frame size=0 */
+ 1037 02c2 0895      		ret
+ 1038               	/* epilogue end (size=1) */
+ 1039               	/* function read_time size 26 (25) */
+ 1047               	.Lscope9:
+ 1049               		.stabd	78,0,0
+ 1051               	.global	main
+ 1053               	main:
+ 1054               		.stabd	46,0,0
+ 200:test_lcd.c    **** 			_delay_ms(1000);
+ 201:test_lcd.c    **** 
+ 202:test_lcd.c    **** 	}
+ 203:test_lcd.c    **** 
+ 204:test_lcd.c    **** 
+ 205:test_lcd.c    **** 	// turn on lamps now
+ 206:test_lcd.c    **** 
+ 207:test_lcd.c    **** }
+ 208:test_lcd.c    **** 
+ 209:test_lcd.c    **** int main(void)
+ 210:test_lcd.c    **** {
+ 1056               	.LM107:
+ 1057               	/* prologue: frame size=0 */
+ 1058               	/* prologue end (size=0) */
+ 211:test_lcd.c    ****     /* initialize display, cursor off */
+ 212:test_lcd.c    ****     lcd_init(LCD_DISP_ON);
+ 1060               	.LM108:
+ 1061 02c4 8CE0      		ldi r24,lo8(12)
+ 1062 02c6 00D0      		rcall lcd_init
+ 213:test_lcd.c    **** 
+ 214:test_lcd.c    ****     DDRB &= ~(1 << DDB4);
+ 1064               	.LM109:
+ 1065 02c8 BC98      		cbi 55-0x20,4
+ 215:test_lcd.c    ****     DDRB &= ~(1 << DDB5);
+ 1067               	.LM110:
+ 1068 02ca BD98      		cbi 55-0x20,5
+ 216:test_lcd.c    ****     DDRB &= ~(1 << DDB3);
+ 1070               	.LM111:
+ 1071 02cc BB98      		cbi 55-0x20,3
+ 217:test_lcd.c    ****     DDRB |= (1 << DDB2);
+ 1073               	.LM112:
+ 1074 02ce BA9A      		sbi 55-0x20,2
+ 218:test_lcd.c    **** 
+ 219:test_lcd.c    ****     lcd_clrscr();
+ 1076               	.LM113:
+ 1077 02d0 00D0      		rcall lcd_clrscr
+ 220:test_lcd.c    ****     //lcd_puts("LCD Test Line 1\n");
+ 221:test_lcd.c    **** 
+ 222:test_lcd.c    ****     encode_init();
+ 1079               	.LM114:
+ 1080 02d2 00D0      		rcall encode_init
+ 223:test_lcd.c    ****     sei();
+ 1082               	.LM115:
+ 1083               	/* #APP */
+ 1084 02d4 7894      		sei
+ 224:test_lcd.c    **** 
+ 225:test_lcd.c    ****     time = 0;
+ 1086               	.LM116:
+ 1087               	/* #NOAPP */
+ 1088 02d6 1092 0000 		sts time,__zero_reg__
+ 1089               	.L86:
+ 226:test_lcd.c    **** 
+ 227:test_lcd.c    ****     for (;;) {                           /* loop forever */
+ 228:test_lcd.c    ****     	lcd_clrscr();
+ 1091               	.LM117:
+ 1092 02da 00D0      		rcall lcd_clrscr
+ 229:test_lcd.c    ****     	read_time();
+ 1094               	.LM118:
+ 1095 02dc 00D0      		rcall read_time
+ 230:test_lcd.c    ****     	lcd_clrscr();
+ 1097               	.LM119:
+ 1098 02de 00D0      		rcall lcd_clrscr
+ 231:test_lcd.c    ****     	read_sides();
+ 1100               	.LM120:
+ 1101 02e0 00D0      		rcall read_sides
+ 232:test_lcd.c    ****     	lcd_clrscr();
+ 1103               	.LM121:
+ 1104 02e2 00D0      		rcall lcd_clrscr
+ 233:test_lcd.c    ****     	start_doing_it();
+ 1106               	.LM122:
+ 1107 02e4 00D0      		rcall start_doing_it
+ 1108 02e6 00C0      		rjmp .L86
+ 1109               	/* epilogue: frame size=0 */
+ 1110               	/* epilogue: noreturn */
+ 1111               	/* epilogue end (size=0) */
+ 1112               	/* function main size 19 (19) */
+ 1114               	.Lscope10:
+ 1116               		.stabd	78,0,0
+ 1117               	.global	table
+ 1118               		.section	.progmem.data,"a",@progbits
+ 1121               	table:
+ 1122 0000 00        		.byte	0
+ 1123 0001 00        		.byte	0
+ 1124 0002 FF        		.byte	-1
+ 1125 0003 00        		.byte	0
+ 1126 0004 00        		.byte	0
+ 1127 0005 00        		.byte	0
+ 1128 0006 00        		.byte	0
+ 1129 0007 01        		.byte	1
+ 1130 0008 01        		.byte	1
+ 1131 0009 00        		.byte	0
+ 1132 000a 00        		.byte	0
+ 1133 000b 00        		.byte	0
+ 1134 000c 00        		.byte	0
+ 1135 000d FF        		.byte	-1
+ 1136 000e 00        		.byte	0
+ 1137 000f 00        		.byte	0
+ 1138               		.lcomm last.1558,1
+ 1139               		.comm enc_delta,1,1
+ 1140               		.comm buf,10,1
+ 1141               		.comm time,1,1
+ 1142               		.comm sides,1,1
+ 1149               		.text
+ 1151               	.Letext0:
+ 1152               	/* File "test_lcd.c": code  411 = 0x019b ( 371), prologues  16, epilogues  24 */
+DEFINED SYMBOLS
+                            *ABS*:0000000000000000 test_lcd.c
+     /tmp/cckQfH6E.s:3      *ABS*:000000000000003f __SREG__
+     /tmp/cckQfH6E.s:4      *ABS*:000000000000003e __SP_H__
+     /tmp/cckQfH6E.s:5      *ABS*:000000000000003d __SP_L__
+     /tmp/cckQfH6E.s:6      *ABS*:0000000000000000 __tmp_reg__
+     /tmp/cckQfH6E.s:7      *ABS*:0000000000000001 __zero_reg__
+     /tmp/cckQfH6E.s:98     .text:0000000000000000 __vector_13
+                             .bss:0000000000000000 last.1558
+                            *COM*:0000000000000001 enc_delta
+     /tmp/cckQfH6E.s:1121   .progmem.data:0000000000000000 table
+     /tmp/cckQfH6E.s:178    .text:0000000000000062 encode_init
+     /tmp/cckQfH6E.s:212    .text:0000000000000076 encode_read
+     /tmp/cckQfH6E.s:253    .text:000000000000008a key_pressed
+     /tmp/cckQfH6E.s:278    .text:0000000000000094 beep
+     /tmp/cckQfH6E.s:369    .text:00000000000000b6 start_doing_it
+                            *COM*:0000000000000001 time
+                            *COM*:000000000000000a buf
+     /tmp/cckQfH6E.s:762    .text:00000000000001de output_side_info
+                            *COM*:0000000000000001 sides
+     /tmp/cckQfH6E.s:828    .text:0000000000000218 read_sides
+     /tmp/cckQfH6E.s:917    .text:0000000000000250 output_time_info
+     /tmp/cckQfH6E.s:978    .text:0000000000000294 read_time
+     /tmp/cckQfH6E.s:1053   .text:00000000000002c4 main
+
+UNDEFINED SYMBOLS
+__do_copy_data
+__do_clear_bss
+lcd_clrscr
+__mulhi3
+lcd_home
+lcd_puts
+itoa
+lcd_gotoxy
+lcd_init
