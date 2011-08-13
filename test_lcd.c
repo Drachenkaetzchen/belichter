@@ -20,12 +20,19 @@ Hardware: HD44780 compatible LCD text display
 
 //#define XTAL        8e6                 // 8MHz
 
-#define PHASE_A     (PINB & 1<<PINB5)
-#define PHASE_B     (PINB & 1<<PINB4)
+#define PHASE_A     (PINB & 1<<PINB4)
+#define PHASE_B     (PINB & 1<<PINB3)
 
 volatile int8_t enc_delta;              // Drehgeberbewegung zwischen
                                         // zwei Auslesungen im Hauptprogramm
+// Dekodertabelle für wackeligen Rastpunkt
+// halbe Auflösung
 int8_t table[16] PROGMEM = {0,0,-1,0,0,0,0,1,1,0,0,0,0,-1,0,0};
+
+// Dekodertabelle für normale Drehgeber
+// volle Auflösung
+//int8_t table[16] PROGMEM = {0,1,-1,0,-1,0,0,1,1,0,0,-1,0,-1,1,0};
+
 char buf[10];
 
 uint8_t time;
@@ -63,7 +70,7 @@ void encode_init( void )            // nur Timer 0 initialisieren
 }
 
 
-int8_t encode_read( void )         // Encoder auslesen
+/*int8_t encode_read( void )         // Encoder auslesen
 {
   int8_t val;
 
@@ -72,11 +79,25 @@ int8_t encode_read( void )         // Encoder auslesen
   val = enc_delta;
   enc_delta = 0;
   sei();
+  if (val < 0) { return -1; }
+  if (val == 0) { return 0; }
+  if (val > 1) { return 1; }
   return val;
+}*/
+
+int8_t encode_read( void )         // read two step encoders
+{
+  int8_t val;
+
+  cli();
+  val = enc_delta;
+  enc_delta = val & 1;
+  sei();
+  return val >> 1;
 }
 
 uint8_t key_pressed () {
-	return PINB & 1<<PINB3;
+	return PINB & 1<<PINB1;
 }
 
 void output_time_info () {
@@ -166,6 +187,7 @@ void beep () {
 		PORTB &= ~(1<<PB2);
 	}
 }
+
 void start_doing_it () {
 	uint32_t master_timer = time;
 
@@ -173,14 +195,14 @@ void start_doing_it () {
 
 	switch (sides) {
 		case 0:
-			PORTB |= (1<<PB1);
 			PORTB |= (1<<PB0);
+			PORTD |= (1<<PD6);
 			break;
 		case 1:
-			PORTB |= (1<<PB1);
+			PORTB |= (1<<PB0);
 			break;
 		case 2:
-			PORTB |= (1<<PB0);
+			PORTD |= (1<<PD6);
 			break;
 	}
 
@@ -195,7 +217,7 @@ void start_doing_it () {
 	}
 
 	PORTB &= ~(1<<PB0);
-	PORTB &= ~(1<<PB1);
+	PORTD &= ~(1<<PD6);
 
 	lcd_clrscr();
 	lcd_puts("Fertig!");
@@ -228,9 +250,11 @@ int main(void)
     lcd_init(LCD_DISP_ON);
 
     DDRB &= ~(1 << DDB4);
-    DDRB &= ~(1 << DDB5);
+    DDRB &= ~(1 << DDB1);
     DDRB &= ~(1 << DDB3);
     DDRB |= (1 << DDB2);
+    DDRB |= (1 << DDB0);
+    DDRD |= (1 << DDD6);
 
     lcd_clrscr();
     //lcd_puts("LCD Test Line 1\n");
