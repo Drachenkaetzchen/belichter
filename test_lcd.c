@@ -33,10 +33,22 @@ int8_t table[16] PROGMEM = {0,0,-1,0,0,0,0,1,1,0,0,0,0,-1,0,0};
 // volle Auflösung
 //int8_t table[16] PROGMEM = {0,1,-1,0,-1,0,0,1,1,0,0,-1,0,-1,1,0};
 
-char buf[10];
+const char str_closelid[] PROGMEM = "Deckel schliessen";
+const char str_timeleft[] PROGMEM = "Zeit: ";
+const char str_duration[] PROGMEM = "Belichtungsdauer";
+const char str_seconds[] PROGMEM = " Sek.  ";
+const char str_tubes[] PROGMEM = "Roehren";
+const char str_tubes_upper[] PROGMEM = "Oben ";
+const char str_tubes_lower[] PROGMEM = "Unten";
+const char str_tubes_both[] PROGMEM = "Beide";
+const char str_done1[] PROGMEM = "Fertig";
+
+
+
+char buf[18];
 
 uint8_t time;
-uint8_t sides;
+uint8_t sides = 0;
 
 /*
 ** constant definitions
@@ -100,13 +112,17 @@ uint8_t key_pressed () {
 	return PINB & 1<<PINB1;
 }
 
+uint8_t lid_closed () {
+	return PINB & 1<<PINB7;
+}
+
 void output_time_info () {
 	lcd_gotoxy(0,0);
-				lcd_puts("Belichtungsdauer");
+				lcd_puts_p(str_duration);
 				lcd_gotoxy(0,1);
 				itoa((time+1)*10, buf, 10);
 				lcd_puts(buf);
-				lcd_puts(" Sekunden  ");
+				lcd_puts_p(str_seconds);
 }
 void read_time () {
 	int8_t val;
@@ -132,19 +148,19 @@ void read_time () {
 
 void output_side_info () {
 	lcd_gotoxy(0,0);
-				lcd_puts("Roehren");
+				lcd_puts_p(str_tubes);
 				lcd_gotoxy(0,1);
 
 
 				switch (sides) {
 				case 0:
-					lcd_puts("beide");
+					lcd_puts_p(str_tubes_both);
 					break;
 				case 1:
-					lcd_puts("oben ");
+					lcd_puts_p(str_tubes_upper);
 					break;
 				case 2:
-					lcd_puts("unten");
+					lcd_puts_p(str_tubes_lower);
 					break;
 				}
 }
@@ -160,10 +176,12 @@ void read_sides () {
 
 		if (val != 0) {
 
-			sides += val;
+			if (!(sides == 0 && val < 0)) {
+				sides += val;
+			}
 
 			if (sides > 2) {
-				sides = 0;
+				sides = 2;
 			}
 
 			output_side_info();
@@ -193,6 +211,15 @@ void start_doing_it () {
 
 	lcd_clrscr();
 
+	lcd_puts_p(str_closelid);
+
+	while (!lid_closed()) {}
+
+	lcd_clrscr();
+
+
+
+
 	switch (sides) {
 		case 0:
 			PORTB |= (1<<PB0);
@@ -208,7 +235,7 @@ void start_doing_it () {
 
 	for (master_timer = ((time+1)*10)-1;master_timer > 0;master_timer--) {
 		lcd_home();
-		lcd_puts("Zeit: ");
+		lcd_puts_p(str_timeleft);
 
 		itoa(master_timer, buf, 10);
 		lcd_puts(buf);
@@ -220,10 +247,9 @@ void start_doing_it () {
 	PORTD &= ~(1<<PD6);
 
 	lcd_clrscr();
-	lcd_puts("Fertig!");
-	lcd_gotoxy(0,1);
-	lcd_puts("Guten Appetit");
-	for (master_timer = 0; master_timer < 5;master_timer++) {
+	lcd_puts_p(str_done1);
+
+	for (master_timer = 0; master_timer < 2;master_timer++) {
 		beep();
 			_delay_ms(100);
 			beep();
@@ -240,7 +266,6 @@ void start_doing_it () {
 	}
 
 
-	// turn on lamps now
 
 }
 
@@ -249,9 +274,13 @@ int main(void)
     /* initialize display, cursor off */
     lcd_init(LCD_DISP_ON);
 
+    /* Eingänge */
     DDRB &= ~(1 << DDB4);
     DDRB &= ~(1 << DDB1);
     DDRB &= ~(1 << DDB3);
+    DDRB &= ~(1 << DDB7);
+
+    /* Ausgänge */
     DDRB |= (1 << DDB2);
     DDRB |= (1 << DDB0);
     DDRD |= (1 << DDD6);
